@@ -1,11 +1,15 @@
 # Al inicio, después de los imports
+# pyrefly: ignore [missing-import]
 import graphene
 from django.db import transaction
+# pyrefly: ignore [missing-import]
 from graphql import GraphQLError
+# pyrefly: ignore [missing-import]
 from graphene_django import DjangoObjectType
 from django.contrib.auth.hashers import make_password
 from django.db.models import ProtectedError
 from datetime import datetime, timedelta
+# pyrefly: ignore [missing-import]
 import pyotp
 import random
 import hashlib
@@ -196,18 +200,20 @@ class ResolucionAntiguaType(DjangoObjectType):
         model = ResolucionAntigua
         fields = '__all__'
 
+class DenuncianteDenunciaType(DjangoObjectType):
+    class Meta:
+        model = DenuncianteDenuncia
+        fields = '__all__'
 
+class DenunciadoDenunciaType(DjangoObjectType):
+    class Meta:
+        model = DenunciadoDenuncia
+        fields = '__all__'
 
-
-
-
-
-
-
-
-
-
-
+class FechaNoHabilType(DjangoObjectType):
+    class Meta:
+        model = FechaNoHabil
+        fields = '__all__'
 
 
 
@@ -500,6 +506,29 @@ class ActualizarDenunciaInput(graphene.InputObjectType):
     fecha_registro_gaceta         = graphene.String()
     numero_gaceta                 = graphene.String()
 
+# ── Inputs para tablas pivot de denunciantes/denunciados ────────
+class AgregarDenuncianteDenunciaInput(graphene.InputObjectType):
+    id_denuncia = graphene.Int(required=True)
+    id_persona  = graphene.Int(required=True)
+    es_principal = graphene.Boolean()
+
+class AgregarDenunciadoDenunciaInput(graphene.InputObjectType):
+    id_denuncia     = graphene.Int(required=True)
+    id_persona      = graphene.Int(required=True)
+    tipo_denunciado = graphene.String()
+    es_principal    = graphene.Boolean()
+
+# ── Inputs para Calendario de fechas no hábiles ──────────────────
+class CrearFechaNoHabilInput(graphene.InputObjectType):
+    fecha       = graphene.String(required=True)  # YYYY-MM-DD
+    descripcion = graphene.String(required=True)
+    tipo        = graphene.String()               # FERIADO, DESCANSO_PEDAGOGICO, etc.
+    id_usuario  = graphene.Int()
+
+class ActualizarFechaNoHabilInput(graphene.InputObjectType):
+    descripcion = graphene.String()
+    tipo        = graphene.String()
+
 # DESPUÉS
 class CrearResolucionAntiguaInput(graphene.InputObjectType):
     numero_resolucion = graphene.String(required=True)
@@ -606,6 +635,9 @@ class Query(graphene.ObjectType):
     reporte_carga_por_sala        = graphene.List(ReporteCargaSalaType, anio=graphene.Int(), mes=graphene.Int(), fecha_inicio=graphene.String(), fecha_fin=graphene.String())
     reporte_actividad_usuarios    = graphene.List(ReporteUsuarioType,   anio=graphene.Int(), mes=graphene.Int(), fecha_inicio=graphene.String(), fecha_fin=graphene.String())
 
+    # CALENDARIO
+    all_fechas_no_habiles = graphene.List(FechaNoHabilType)
+
     usuario_by_id    = graphene.Field(UsuarioType,    id=graphene.Int(required=True))
     tribunal_by_id   = graphene.Field(TribunalType,   id=graphene.Int(required=True))
     expediente_by_id = graphene.Field(ExpedienteType, id=graphene.Int(required=True))
@@ -626,8 +658,8 @@ class Query(graphene.ObjectType):
     conformaciones_por_expediente = graphene.List(ConformacionSalaExpedienteType,   id_expediente=graphene.Int(required=True))
     recursos_por_expediente       = graphene.List(RecursoType,                      id_expediente=graphene.Int(required=True))
 
-
-
+    def resolve_all_fechas_no_habiles(root, info):
+        return FechaNoHabil.objects.all()
 
 
 
@@ -636,6 +668,21 @@ class Query(graphene.ObjectType):
     documento_by_id  = graphene.Field(DocumentoType,  id=graphene.Int(required=True))
 
     all_denuncias = graphene.List(DenunciaType)
+
+    # Tabla pivot denunciantes
+    denunciantes_por_denuncia = graphene.List(
+        DenuncianteDenunciaType, id_denuncia=graphene.Int(required=True)
+    )
+    # Tabla pivot denunciados
+    denunciados_por_denuncia = graphene.List(
+        DenunciadoDenunciaType, id_denuncia=graphene.Int(required=True)
+    )
+    # Calendario de fechas no hábiles
+    all_fechas_no_habiles = graphene.List(FechaNoHabilType)
+    fechas_no_habiles_por_anio = graphene.List(
+        FechaNoHabilType, anio=graphene.Int(required=True)
+    )
+    es_fecha_no_habil = graphene.Boolean(fecha=graphene.String(required=True))
 
     # En class Query, junto a all_denuncias:
     proximo_numero_denuncia = graphene.String()
@@ -880,6 +927,29 @@ class Query(graphene.ObjectType):
             return Denuncia.objects.get(id=id)
         except Denuncia.DoesNotExist:
             return None
+
+    def resolve_denunciantes_por_denuncia(root, info, id_denuncia):
+        return DenuncianteDenuncia.objects.filter(denuncia_id=id_denuncia).select_related('persona')
+
+    def resolve_denunciados_por_denuncia(root, info, id_denuncia):
+        return DenunciadoDenuncia.objects.filter(denuncia_id=id_denuncia).select_related('persona')
+
+    def resolve_all_fechas_no_habiles(root, info):
+        return FechaNoHabil.objects.all()
+
+    def resolve_fechas_no_habiles_por_anio(root, info, anio):
+        return FechaNoHabil.objects.filter(fecha__year=anio)
+
+    def resolve_es_fecha_no_habil(root, info, fecha):
+        from datetime import datetime
+        try:
+            d = datetime.strptime(fecha, '%Y-%m-%d').date()
+            # Sábado=5, Domingo=6
+            if d.weekday() >= 5:
+                return True
+            return FechaNoHabil.objects.filter(fecha=d).exists()
+        except ValueError:
+            return False
     
     def resolve_all_resoluciones_antiguas(root, info):
         return ResolucionAntigua.objects.all()
@@ -1518,6 +1588,13 @@ class CrearAudiencia(graphene.Mutation):
         # El frontend envía: "2024-01-15T14:30:00"
         fecha_hora = datetime.strptime(input.fecha_hora_programada, '%Y-%m-%dT%H:%M')
         
+        # Validar que no caiga en fin de semana o día inhábil
+        if not es_dia_habil(fecha_hora.date()):
+            raise GraphQLError(
+                "No se puede programar la audiencia: La fecha seleccionada cae en fin de semana "
+                "o en un período inhábil (Feriado, Receso, etc.) registrado en el Calendario."
+            )
+        
         audiencia = Audiencia.objects.create(
             id_expediente=expediente,
             id_tipo_audiencia=tipo,
@@ -1554,9 +1631,16 @@ class ActualizarAudiencia(graphene.Mutation):
             
             # ✅ CORREGIDO: Formato SIN segundos (solo hasta minutos)
             if input.fecha_hora_programada is not None:
-                obj.fecha_hora_programada = datetime.strptime(
+                nueva_fecha = datetime.strptime(
                     input.fecha_hora_programada, '%Y-%m-%dT%H:%M'
                 )
+                if not es_dia_habil(nueva_fecha.date()):
+                    raise GraphQLError(
+                        "No se puede programar/reprogramar la audiencia: La fecha seleccionada cae en fin de semana "
+                        "o en un período inhábil registrado en el Calendario."
+                    )
+                obj.fecha_hora_programada = nueva_fecha
+
             
             if input.fecha_hora_inicio is not None:
                 obj.fecha_hora_inicio = datetime.strptime(
@@ -2053,6 +2137,7 @@ class CrearRecurso(graphene.Mutation):
             estado_recurso='PENDIENTE', fundamentos=fundamentos))
 
 from .models import *  # ← Esto importa Recurso, Expediente, EstadoExpediente, etc.
+# pyrefly: ignore [missing-import]
 import graphene
 from datetime import date
 from django.utils import timezone
@@ -2612,7 +2697,9 @@ class EliminarSolicitud(graphene.Mutation):
 # OTP - Google Authenticator
 # ============================================================
 
+# pyrefly: ignore [missing-import]
 import graphene
+# pyrefly: ignore [missing-import]
 import pyotp
 import jwt
 
@@ -2910,8 +2997,14 @@ class ObtenerQr(graphene.Mutation):
         
         img = qrcode.make(uri)
         buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
+        # Compatible con ambos backends: PIL (Pillow) y PyPNG puro
+        # PIL acepta format="PNG", PyPNGImage no acepta ese argumento
+        try:
+            img.save(buffer, format="PNG")   # Pillow backend
+        except TypeError:
+            img.save(buffer)                 # PyPNG backend (siempre guarda PNG)
         qr_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
         
         return ObtenerQrResult(
             success=True,
@@ -6084,6 +6177,177 @@ class EliminarDenuncia(graphene.Mutation):
             return EliminarDenuncia(ok=False, mensaje="Denuncia no encontrada")
 
 
+# ============================================================
+# MUTACIONES: PARTES ADICIONALES DE DENUNCIA
+# ============================================================
+
+class AgregarDenuncianteDenuncia(graphene.Mutation):
+    class Arguments:
+        input = AgregarDenuncianteDenunciaInput(required=True)
+    ok = graphene.Boolean()
+    mensaje = graphene.String()
+    denunciante_denuncia = graphene.Field(DenuncianteDenunciaType)
+
+    def mutate(root, info, input):
+        try:
+            denuncia = Denuncia.objects.get(id=input.id_denuncia)
+            persona  = Persona.objects.get(id_persona=input.id_persona)
+        except Denuncia.DoesNotExist:
+            return AgregarDenuncianteDenuncia(ok=False, mensaje="Denuncia no encontrada", denunciante_denuncia=None)
+        except Persona.DoesNotExist:
+            return AgregarDenuncianteDenuncia(ok=False, mensaje="Persona no encontrada", denunciante_denuncia=None)
+
+        if DenuncianteDenuncia.objects.filter(denuncia=denuncia, persona=persona).exists():
+            return AgregarDenuncianteDenuncia(ok=False, mensaje="Esta persona ya es denunciante en esta denuncia", denunciante_denuncia=None)
+
+        es_principal = input.get('es_principal', False) or False
+        obj = DenuncianteDenuncia.objects.create(
+            denuncia=denuncia,
+            persona=persona,
+            es_principal=es_principal,
+        )
+        if es_principal:
+            denuncia.denunciante = persona
+            denuncia.save(update_fields=['denunciante'])
+        return AgregarDenuncianteDenuncia(ok=True, mensaje="Denunciante agregado", denunciante_denuncia=obj)
+
+
+class EliminarDenuncianteDenuncia(graphene.Mutation):
+    class Arguments:
+        id = graphene.Int(required=True)
+    ok = graphene.Boolean()
+    mensaje = graphene.String()
+
+    def mutate(root, info, id):
+        try:
+            obj = DenuncianteDenuncia.objects.get(id_denunciante_denuncia=id)
+            obj.delete()
+            return EliminarDenuncianteDenuncia(ok=True, mensaje="Denunciante removido")
+        except DenuncianteDenuncia.DoesNotExist:
+            return EliminarDenuncianteDenuncia(ok=False, mensaje="Registro no encontrado")
+
+
+class AgregarDenunciadoDenuncia(graphene.Mutation):
+    class Arguments:
+        input = AgregarDenunciadoDenunciaInput(required=True)
+    ok = graphene.Boolean()
+    mensaje = graphene.String()
+    denunciado_denuncia = graphene.Field(DenunciadoDenunciaType)
+
+    def mutate(root, info, input):
+        try:
+            denuncia = Denuncia.objects.get(id=input.id_denuncia)
+            persona  = Persona.objects.get(id_persona=input.id_persona)
+        except Denuncia.DoesNotExist:
+            return AgregarDenunciadoDenuncia(ok=False, mensaje="Denuncia no encontrada", denunciado_denuncia=None)
+        except Persona.DoesNotExist:
+            return AgregarDenunciadoDenuncia(ok=False, mensaje="Persona no encontrada", denunciado_denuncia=None)
+
+        if DenunciadoDenuncia.objects.filter(denuncia=denuncia, persona=persona).exists():
+            return AgregarDenunciadoDenuncia(ok=False, mensaje="Esta persona ya es denunciada en esta denuncia", denunciado_denuncia=None)
+
+        tipo = input.get('tipo_denunciado') or denuncia.tipo_denunciado
+        es_principal = input.get('es_principal', False) or False
+        obj = DenunciadoDenuncia.objects.create(
+            denuncia=denuncia,
+            persona=persona,
+            tipo_denunciado=tipo,
+            es_principal=es_principal,
+        )
+        if es_principal:
+            denuncia.denunciado = persona
+            denuncia.tipo_denunciado = tipo
+            denuncia.save(update_fields=['denunciado', 'tipo_denunciado'])
+        return AgregarDenunciadoDenuncia(ok=True, mensaje="Denunciado agregado", denunciado_denuncia=obj)
+
+
+class EliminarDenunciadoDenuncia(graphene.Mutation):
+    class Arguments:
+        id = graphene.Int(required=True)
+    ok = graphene.Boolean()
+    mensaje = graphene.String()
+
+    def mutate(root, info, id):
+        try:
+            obj = DenunciadoDenuncia.objects.get(id_denunciado_denuncia=id)
+            obj.delete()
+            return EliminarDenunciadoDenuncia(ok=True, mensaje="Denunciado removido")
+        except DenunciadoDenuncia.DoesNotExist:
+            return EliminarDenunciadoDenuncia(ok=False, mensaje="Registro no encontrado")
+
+
+# ============================================================
+# MUTACIONES: CALENDARIO FECHAS NO HÁBILES
+# ============================================================
+
+class CrearFechaNoHabil(graphene.Mutation):
+    class Arguments:
+        input = CrearFechaNoHabilInput(required=True)
+    ok = graphene.Boolean()
+    mensaje = graphene.String()
+    fecha_no_habil = graphene.Field(FechaNoHabilType)
+
+    def mutate(root, info, input):
+        from datetime import datetime
+        try:
+            d = datetime.strptime(input.fecha, '%Y-%m-%d').date()
+        except ValueError:
+            return CrearFechaNoHabil(ok=False, mensaje="Formato de fecha inválido. Use YYYY-MM-DD", fecha_no_habil=None)
+
+        if FechaNoHabil.objects.filter(fecha=d).exists():
+            return CrearFechaNoHabil(ok=False, mensaje="Ya existe un registro para esa fecha", fecha_no_habil=None)
+
+        usuario = None
+        if input.get('id_usuario'):
+            try:
+                usuario = Usuario.objects.get(id_usuario=input.id_usuario)
+            except Usuario.DoesNotExist:
+                pass
+
+        obj = FechaNoHabil.objects.create(
+            fecha=d,
+            descripcion=input.descripcion,
+            tipo=input.get('tipo') or 'FERIADO',
+            creado_por=usuario,
+        )
+        return CrearFechaNoHabil(ok=True, mensaje="Fecha registrada", fecha_no_habil=obj)
+
+
+class ActualizarFechaNoHabilMutation(graphene.Mutation):
+    class Arguments:
+        id    = graphene.Int(required=True)
+        input = ActualizarFechaNoHabilInput(required=True)
+    ok = graphene.Boolean()
+    mensaje = graphene.String()
+    fecha_no_habil = graphene.Field(FechaNoHabilType)
+
+    def mutate(root, info, id, input):
+        try:
+            obj = FechaNoHabil.objects.get(id_fecha_no_habil=id)
+        except FechaNoHabil.DoesNotExist:
+            return ActualizarFechaNoHabilMutation(ok=False, mensaje="Registro no encontrado", fecha_no_habil=None)
+        if input.get('descripcion'):
+            obj.descripcion = input.descripcion
+        if input.get('tipo'):
+            obj.tipo = input.tipo
+        obj.save()
+        return ActualizarFechaNoHabilMutation(ok=True, mensaje="Actualizado", fecha_no_habil=obj)
+
+
+class EliminarFechaNoHabil(graphene.Mutation):
+    class Arguments:
+        id = graphene.Int(required=True)
+    ok = graphene.Boolean()
+    mensaje = graphene.String()
+
+    def mutate(root, info, id):
+        try:
+            FechaNoHabil.objects.get(id_fecha_no_habil=id).delete()
+            return EliminarFechaNoHabil(ok=True, mensaje="Fecha eliminada")
+        except FechaNoHabil.DoesNotExist:
+            return EliminarFechaNoHabil(ok=False, mensaje="Registro no encontrado")
+
+
 class CrearResolucionAntigua(graphene.Mutation):
     class Arguments:
         input = CrearResolucionAntiguaInput(required=True)
@@ -6284,8 +6548,123 @@ class RegistrarTrasladoApelacion(graphene.Mutation):
 
 
 # ============================================================
+# MÓDULO CALENDARIO — DÍAS INHÁBILES
+# ============================================================
+
+# ── HELPER: verifica si una fecha (date) es hábil ──────────
+def es_dia_habil(fecha_date):
+    """
+    Retorna True si la fecha es laborable:
+    - No es sábado (5) ni domingo (6).
+    - No cae dentro de ningún FechaNoHabil activo.
+    """
+    from django.db.models import Q
+    if fecha_date.weekday() >= 5:
+        return False
+    # Consultar tabla de fechas no hábiles
+    return not FechaNoHabil.objects.filter(
+        activo=True,
+        fecha_inicio__lte=fecha_date,
+    ).filter(
+        Q(fecha_fin__gte=fecha_date) | Q(fecha_fin__isnull=True, fecha_inicio=fecha_date)
+    ).exists()
+
+
+
+# ── INPUT ───────────────────────────────────────────────────
+class FechaNoHabilInput(graphene.InputObjectType):
+    fecha_inicio = graphene.String(required=True)
+    fecha_fin    = graphene.String()
+    tipo         = graphene.String(required=True)
+    descripcion  = graphene.String(required=True)
+    activo       = graphene.Boolean()
+
+
+# ── MUTATIONS ───────────────────────────────────────────────
+class CrearFechaNoHabil(graphene.Mutation):
+    class Arguments:
+        input      = FechaNoHabilInput(required=True)
+        usuario_id = graphene.Int(required=True)
+
+    ok      = graphene.Boolean()
+    mensaje = graphene.String()
+    dia     = graphene.Field(FechaNoHabilType)
+
+    @staticmethod
+    def mutate(root, info, input, usuario_id):
+        try:
+            from datetime import date as date_cls
+            fi = date_cls.fromisoformat(input.fecha_inicio)
+            ff = date_cls.fromisoformat(input.fecha_fin) if input.fecha_fin else fi
+            if ff < fi:
+                return CrearFechaNoHabil(ok=False, mensaje="La fecha de fin no puede ser anterior a la de inicio.", dia=None)
+
+            usuario = Usuario.objects.filter(id_usuario=usuario_id).first()
+            dia = FechaNoHabil.objects.create(
+                fecha_inicio = fi,
+                fecha_fin    = ff,
+                tipo         = input.tipo,
+                descripcion  = input.descripcion,
+                activo       = input.activo if input.activo is not None else True,
+                creado_por   = usuario,
+            )
+            return CrearFechaNoHabil(ok=True, mensaje="Registro creado correctamente.", dia=dia)
+        except Exception as e:
+            return CrearFechaNoHabil(ok=False, mensaje=str(e), dia=None)
+
+
+class ActualizarFechaNoHabilMutation(graphene.Mutation):
+    class Arguments:
+        id_fecha_no_habil = graphene.Int(required=True)
+        input             = FechaNoHabilInput(required=True)
+
+    ok      = graphene.Boolean()
+    mensaje = graphene.String()
+    dia     = graphene.Field(FechaNoHabilType)
+
+    @staticmethod
+    def mutate(root, info, id_fecha_no_habil, input):
+        try:
+            from datetime import date as date_cls
+            dia = FechaNoHabil.objects.get(pk=id_fecha_no_habil)
+            dia.fecha_inicio = date_cls.fromisoformat(input.fecha_inicio)
+            dia.fecha_fin    = date_cls.fromisoformat(input.fecha_fin) if input.fecha_fin else dia.fecha_inicio
+            if dia.fecha_fin < dia.fecha_inicio:
+                return ActualizarFechaNoHabilMutation(ok=False, mensaje="La fecha de fin no puede ser anterior a la de inicio.", dia=None)
+            dia.tipo        = input.tipo
+            dia.descripcion = input.descripcion
+            if input.activo is not None:
+                dia.activo = input.activo
+            dia.save()
+            return ActualizarFechaNoHabilMutation(ok=True, mensaje="Registro actualizado.", dia=dia)
+        except FechaNoHabil.DoesNotExist:
+            return ActualizarFechaNoHabilMutation(ok=False, mensaje="Registro no encontrado.", dia=None)
+        except Exception as e:
+            return ActualizarFechaNoHabilMutation(ok=False, mensaje=str(e), dia=None)
+
+
+class EliminarFechaNoHabil(graphene.Mutation):
+    class Arguments:
+        id_fecha_no_habil = graphene.Int(required=True)
+
+    ok      = graphene.Boolean()
+    mensaje = graphene.String()
+
+    @staticmethod
+    def mutate(root, info, id_fecha_no_habil):
+        try:
+            FechaNoHabil.objects.get(pk=id_fecha_no_habil).delete()
+            return EliminarFechaNoHabil(ok=True, mensaje="Registro eliminado.")
+        except FechaNoHabil.DoesNotExist:
+            return EliminarFechaNoHabil(ok=False, mensaje="Registro no encontrado.")
+
+
+
+
+# ============================================================
 # MUTATION PRINCIPAL
 # ============================================================
+
 
 class Mutation(graphene.ObjectType):
     # Usuario
@@ -6441,6 +6820,17 @@ class Mutation(graphene.ObjectType):
     registrar_ratificacion_pruebas  = RegistrarRatificacionPruebas.Field()
     registrar_traslado_apelacion    = RegistrarTrasladoApelacion.Field()
     enviar_notificacion_ejecucion   = EnviarNotificacionEjecucion.Field()
+
+    # PARTES ADICIONALES DE DENUNCIA
+    agregar_denunciante_denuncia  = AgregarDenuncianteDenuncia.Field()
+    eliminar_denunciante_denuncia = EliminarDenuncianteDenuncia.Field()
+    agregar_denunciado_denuncia   = AgregarDenunciadoDenuncia.Field()
+    eliminar_denunciado_denuncia  = EliminarDenunciadoDenuncia.Field()
+
+    # CALENDARIO — Fechas no hábiles
+    crear_fecha_no_habil      = CrearFechaNoHabil.Field()
+    actualizar_fecha_no_habil = ActualizarFechaNoHabilMutation.Field()
+    eliminar_fecha_no_habil   = EliminarFechaNoHabil.Field()
 
 
 schema = graphene.Schema(query=Query, mutation=Mutation)

@@ -755,6 +755,116 @@ class Denuncia(models.Model):
         limite = self.fecha_hecho + timedelta(days=730)
         return timezone.now().date() > limite
 
+
+# ── Tabla pivot: varios denunciantes por denuncia ──────────────
+class DenuncianteDenuncia(models.Model):
+    """Permite registrar múltiples denunciantes en una misma denuncia."""
+    id_denunciante_denuncia = models.AutoField(primary_key=True)
+    denuncia = models.ForeignKey(
+        Denuncia, on_delete=models.CASCADE,
+        related_name='denunciantes_adicionales'
+    )
+    persona = models.ForeignKey(
+        Persona, on_delete=models.PROTECT,
+        related_name='denuncias_como_denunciante'
+    )
+    es_principal = models.BooleanField(
+        default=False,
+        help_text="Indica si es el denunciante principal (usado para notificaciones)"
+    )
+    fecha_inclusion = models.DateField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'denunciante_denuncia'
+        unique_together = ['denuncia', 'persona']
+
+    def __str__(self):
+        return f"{self.persona} → Denuncia {self.denuncia.numero_denuncia}"
+
+
+# ── Tabla pivot: varios denunciados por denuncia ───────────────
+class DenunciadoDenuncia(models.Model):
+    """Permite registrar múltiples denunciados en una misma denuncia."""
+    TIPOS_DENUNCIADO = [
+        ('ESTUDIANTE', 'Estudiante'),
+        ('DOCENTE', 'Docente'),
+        ('ADMINISTRATIVO', 'Administrativo'),
+        ('AUTORIDAD', 'Autoridad'),
+    ]
+
+    id_denunciado_denuncia = models.AutoField(primary_key=True)
+    denuncia = models.ForeignKey(
+        Denuncia, on_delete=models.CASCADE,
+        related_name='denunciados_adicionales'
+    )
+    persona = models.ForeignKey(
+        Persona, on_delete=models.PROTECT,
+        related_name='denuncias_como_denunciado'
+    )
+    tipo_denunciado = models.CharField(
+        max_length=20, choices=TIPOS_DENUNCIADO, default='ESTUDIANTE'
+    )
+    es_principal = models.BooleanField(
+        default=False,
+        help_text="Indica si es el denunciado principal (usado para notificaciones y resoluciones)"
+    )
+    fecha_inclusion = models.DateField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'denunciado_denuncia'
+        unique_together = ['denuncia', 'persona']
+
+    def __str__(self):
+        return f"{self.persona} → Denuncia {self.denuncia.numero_denuncia}"
+
+
+# ── Calendario de fechas no hábiles ───────────────────────────
+class FechaNoHabil(models.Model):
+    """
+    Fechas (o rangos de fechas) en que el Tribunal no trabaja:
+    feriados nacionales, recesos universitarios, días sin audiencias, etc.
+    El sistema excluye estos días al calcular plazos procesales.
+    """
+    TIPOS = [
+        ('FERIADO',       'Feriado nacional'),
+        ('RECESO',        'Receso universitario'),
+        ('SIN_AUDIENCIA', 'Sin audiencias'),
+        ('SUSPENSION',    'Suspensión de actividades'),
+        ('OTRO',          'Otro'),
+    ]
+
+    id_fecha_no_habil = models.AutoField(primary_key=True)
+    fecha_inicio      = models.DateField(help_text="Primer día del período inhábil")
+    fecha_fin         = models.DateField(help_text="Último día (inclusive). Igual a fecha_inicio si es un solo día.", null=True, blank=True)
+    descripcion       = models.CharField(
+        max_length=200,
+        help_text="Descripción breve del motivo"
+    )
+    tipo              = models.CharField(
+        max_length=30, choices=TIPOS, default='FERIADO'
+    )
+    activo            = models.BooleanField(default=True)
+    creado_por        = models.ForeignKey(
+        Usuario, on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='fechas_no_habiles_creadas'
+    )
+    fecha_registro    = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'fecha_no_habil'
+        ordering = ['fecha_inicio']
+
+    @property
+    def fecha_fin_efectiva(self):
+        """Si no hay fecha_fin, el rango es de un solo día."""
+        return self.fecha_fin if self.fecha_fin else self.fecha_inicio
+
+    def __str__(self):
+        if not self.fecha_fin or self.fecha_fin == self.fecha_inicio:
+            return f"{self.fecha_inicio} — {self.descripcion}"
+        return f"{self.fecha_inicio} → {self.fecha_fin} — {self.descripcion}"
+
 class ResolucionAntigua(models.Model):
     """Resoluciones de casos antiguos (solo para registro histórico)"""
     
@@ -789,6 +899,10 @@ class ResolucionAntigua(models.Model):
     
     def __str__(self):
         return f"Res. {self.numero_resolucion} - {self.persona_denunciada}"
+
+
+
+
 
 
 

@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+# pyrefly: ignore [missing-import]
 from graphene_django.views import GraphQLView
 from django.views.decorators.csrf import csrf_exempt
 from tribunal.views import subir_documento, descargar_documento, obtener_logo  # ← agregar obtener_logo
